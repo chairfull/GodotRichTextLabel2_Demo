@@ -87,8 +87,21 @@ func _ready() -> void:
 	
 	rt_trans.set_bbcode("Press ~<<Space>~ to start.")
 
+# Used with pipe |cap
+func cap(s: String) -> String:
+	return s.capitalize()
+
+# Used with pipe |yell
+func yell(s: String) -> String:
+	return s.to_upper()
+
+# Used with pipe |ooify
+func ooify(s: String) -> String:
+	return s.replace("o", "[sin]ooo[/sin]").replace("O", "[sin]OOO[/sin]")
+
 func hop():
 	animation_player.play(&"hop")
+
 
 func next_message():
 	if current < len(messages)-1:

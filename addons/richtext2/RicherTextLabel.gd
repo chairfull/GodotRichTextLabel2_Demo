@@ -1,6 +1,6 @@
 @tool
 extends RichTextLabel
-class_name RichTextLabel2
+class_name RicherTextLabel
 
 const DIR_TEXT_EFFECTS := "res://addons/richtext2/text_effects/effects"
 const DIR_TEXT_TRANSITIONS := "res://addons/richtext2/text_effects/anims"
@@ -226,7 +226,7 @@ func _update_theme_shadow():
 @export var context_path: NodePath = "/root/State"
 ## Extra parameters that can be accessed in context.
 @export_storage var context_state := {}
-## Will attempt to call `to_string_nice()` on objects. Otherwise `.to_string()` is used.
+## Will attempt to call `to_rich_string()` on objects. Otherwise `.to_string()` is used.
 @export var context_nice_objects := true
 ## Will automatically add commas to integers: 1234 -> 1,234
 @export var context_nice_ints := true
@@ -238,14 +238,12 @@ func _update_theme_shadow():
 @export var autostyle_numbers := true
 ## Tag to wrap numbers in.
 @export var autostyle_numbers_tag := "[salmon]%s[]"
+## Automatically pad numbers to limit trailing decimals?
+@export var autostyle_numbers_pad_decimals := true
+## How many decimal places?
+@export var autostyle_numbers_decimals := 2
 ## Automatically detects :smile: emojis.
 @export var autostyle_emojis := true
-
-## WARNING: Expieremental.
-@export var width_from_content := false:
-	set(w):
-		width_from_content = w
-		_redraw()
 
 @export_group("Overrides", "override_")
 ## Override so bbcode_enabled = true at init.
@@ -272,10 +270,26 @@ var _meta := {}
 var _meta_hovered: Variant = null
 var _expression_error := OK
 @export_storage var _random: Array[int] ## Used in the effects as a random offset.
+### We need to cache local_mouse_position as it is slow to call repeatedly.
+#var _mouse_position: Vector2
 
 func _init():
 	if not Engine.is_editor_hint():
 		_connect_meta()
+
+func _notification(what: int) -> void:
+	match what:
+		NOTIFICATION_EDITOR_PRE_SAVE:
+			if font_auto_setup:
+				# Clear auto fonts so they aren't saved to disk.
+				remove_theme_font_override("bold_font")
+				remove_theme_font_override("bold_italics_font")
+				remove_theme_font_override("italics_font")
+				remove_theme_font_override("normal_font")
+		
+		NOTIFICATION_EDITOR_POST_SAVE:
+			if font_auto_setup:
+				_update_subfonts()
 
 func _connect_meta():
 	meta_hover_started.connect(_meta_hover_started)
@@ -342,8 +356,11 @@ func set_bbcode(btext: String):
 	## HACK: Deferred so it outraces the set_text function.
 	_set_bbcode.call_deferred()
 	
-	if width_from_content:
-		set_width_from_content.call_deferred()
+	if override_fitContent:
+		await finished
+		if is_inside_tree():
+			await get_tree().process_frame
+		custom_minimum_size.y = get_content_height()
 	
 func _set_bbcode():
 	clear()
@@ -376,9 +393,6 @@ func _set_bbcode():
 	for i in get_total_character_count():
 		_random.append(randi())
 
-func set_width_from_content():
-	custom_minimum_size.x = get_normal_font().get_string_size(get_parsed_text(), HORIZONTAL_ALIGNMENT_CENTER, -1, font_size).x
-
 func _resize_to_content():
 	autowrap_mode = TextServer.AUTOWRAP_OFF
 	custom_minimum_size = Vector2(get_content_width(), get_content_height())
@@ -394,8 +408,7 @@ func set_font(id: String):
 
 func _update_subfonts():
 	if font_auto_setup:
-		if Engine.is_editor_hint():
-			FontHelper.set_fonts(self, font, font_bold_weight, font_italics_slant, font_italics_weight)
+		FontHelper.set_fonts(self, font, font_bold_weight, font_italics_slant, font_italics_weight)
 
 func get_normal_font() -> Font:
 	return get_theme_font("normal_font")
@@ -535,7 +548,7 @@ func replace_context(string: String) -> String:
 	
 	# {} pattern
 	string = _replace(string, r"\{.*?\}", func(strings):
-		var exp = strings[0]
+		var exp: String = strings[0]
 		return _get_expression_nice(exp, unwrap(exp, "{}")))
 	
 	return string
@@ -547,15 +560,15 @@ func _get_expression_nice(exp: String, exp_clean: String) -> String:
 	else:
 		if typeof(value) == TYPE_INT and context_nice_ints:
 			return commas(value)
-		elif typeof(value) == TYPE_OBJECT and context_nice_objects and value.has_method(&"to_string_nice"):
-			return value.to_string_nice()
+		elif typeof(value) == TYPE_OBJECT and context_nice_objects and value.has_method(&"to_rich_string"):
+			return value.to_rich_string()
 		elif typeof(value) == TYPE_ARRAY and context_nice_array:
 			var nice_array := []
 			for item in value:
 				match typeof(item):
 					TYPE_OBJECT:
-						if item.has_method(&"to_string_nice"):
-							nice_array.append(item.to_string_nice())
+						if item.has_method(&"to_rich_string"):
+							nice_array.append(item.to_rich_string())
 						elif "name" in item:
 							nice_array.append(item.name)
 						else:
@@ -566,7 +579,10 @@ func _get_expression_nice(exp: String, exp_clean: String) -> String:
 
 func replace_numbers(string: String) -> String:
 	return _replace(string, r"\b\d{1,3}(?:,\d{3})*(?:\.\d+)?\b", func(strings):
-		return autostyle_numbers_tag % strings[0])
+		var numstr: String = strings[0]
+		if autostyle_numbers_pad_decimals and "." in numstr:
+			numstr = numstr.pad_decimals(autostyle_numbers_decimals)
+		return autostyle_numbers_tag % numstr)
 
 func _parse(btext: String):
 	var regex := RegEx.create_from_string(r"\[\[.*?\]|\[.*?\]")
@@ -604,7 +620,7 @@ func _parse_tags(tags_string: String):
 			_stack_pop()
 			added_stack = false
 		
-		# Close all.
+		# Close everything.
 		elif tag == "/":
 			if added_stack and len(_stack) and not len(_stack[-1]):
 				_stack.pop_back()
@@ -626,14 +642,46 @@ func _parse_tags(tags_string: String):
 	if added_stack and len(_stack) and not len(_stack[-1]):
 		_stack.pop_back()
 
-func get_expression(ex: String):
-	_expression_error = OK
+func get_expression(ex: String, state2 := {}):
 	var node := get_node(context_path)
+	
+	# If a pipe is present.
+	if "|" in ex:
+		# Get all pipes.
+		var pipes := ex.split("|")
+		var ex_prepipe := pipes[0]
+		# Get initial value of expression.
+		var got: Variant = get_expression(ex_prepipe)
+		for i in range(1, len(pipes)):
+			var pipe_parts := pipes[i].split(" ")
+			# First arg is pipe method name.
+			var pipe_meth := pipe_parts[0]
+			# Rest are arguments. Convert to an array.
+			# Does method exist in context node?
+			if node and node.has_method(pipe_meth):
+				var arg_str := "[%s]" % [", ".join(pipe_parts.slice(1))]
+				var pipe_args: Array = [got] + get_expression(arg_str)
+				got = node.callv(pipe_meth, pipe_args)
+			else:
+				var s2 := { "_GOT_": got }
+				var arg_str := []
+				for j in len(pipe_parts)-1:
+					var key := "_ARG%s_" % j
+					s2[key] = get_expression(pipe_parts[j+1])
+					arg_str.append(key)
+				var p_exp := "_GOT_.%s(%s)" % [pipe_meth, ", ".join(arg_str)]
+				got = get_expression(p_exp, s2)
+		return got
+	
+	_expression_error = OK
 	var e := Expression.new()
 	var returned: Variant = null
 	var con_args := context_state.keys() if context_state else []
 	var con_vals := context_state.values() if context_state else []
-	
+	if state2:
+		con_args = con_args + state2.keys()
+		con_vals = con_vals + state2.values()
+		
 	_expression_error = e.parse(ex, con_args)
 	if _expression_error == OK:
 		returned = e.execute(con_vals, node, false)
@@ -808,25 +856,14 @@ func _parse_tag_unused(tag: String, _info: String, _raw: String) -> bool:
 		return true
 	return false
 
-func _preprocess_pipe(s: String) -> String:
-	var i := s.rfind("|")
-	if i != -1:
-		var input := s.substr(0, i)
-		var pipe = s.substr(i+1)
-		var args = Array(pipe.split(" "))
-		var method = args.pop_front()
-		args = args.map(func(x: String): return var_to_str(str_to_var(x)))
-		args.push_front(_preprocess_pipe(input))
-		return "%s(%s)" % [method, ", ".join(args)]
-	return s
-
 func _add_text(t: String):
-	t = t.replace("[[", "[")
-	if len(_state.pipes):
-		var piped := t
-		for pipe in _state.pipes:
-			t += "|" + pipe
-		var eval := _preprocess_pipe(t)
+	if _state.pipes:
+		var exp := "|".join([var_to_str(t)] + _state.pipes)
+		var got = get_expression(exp)
+		t = str(got)
+		append_text(t)
+		return
+		
 	add_text(t)
 
 func _push_meta(data: Variant):
