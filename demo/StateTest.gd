@@ -17,7 +17,7 @@ extends Node
 @export var helmet: TestItem = preload("res://demo/helmet.tres")
 @export var ring: TestItem = preload("res://demo/ring.tres")
 @export var score := 10
-@export var player := { name="Bob" }
+@export var player := {name = "Bob"}
 @export var big_number := 123412516
 var activetalker := "talker"
 
@@ -104,14 +104,14 @@ func hop():
 
 
 func next_message():
-	if current < len(messages)-1:
+	if current < len(messages) - 1:
 		current += 1
 	else:
 		current = 0
 	
 	rt_trans.autostyle_numbers = false
 	# Hide ctc on final message.
-	rt_trans.ctc_on_finished = current != len(messages)-1
+	rt_trans.ctc_on_finished = current != len(messages) - 1
 	rt_trans.set_bbcode(messages[current])
 	
 	waiting = true
